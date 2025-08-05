@@ -15,7 +15,7 @@ from hrm_for_snake import internal_width
 
 # Hyperparameters
 GAMMA = 0.99
-LR = 3e-5
+LR = 1e-4
 BATCH_SIZE = hrm_for_snake.batch_size
 MEMORY_SIZE = int(1e6) #10000
 EPSILON_START = 0.0
@@ -174,12 +174,16 @@ def train(model_path=None):
 
 					#1 Forward pass
 					# print(obs_batch.shape, action_batch.shape)
-					hrm_for_snake.z_init_policy, q_values = policy_net((hrm_for_snake.z_init_policy[0],
+					# hrm_for_snake.z_init_policy, q_values = policy_net((hrm_for_snake.z_init_policy[0],
+						# hrm_for_snake.z_init_policy[1]), obs_batch)
+					_, q_values = policy_net((hrm_for_snake.z_init_policy[0],
 						hrm_for_snake.z_init_policy[1]), obs_batch)
 					# print(q_values.shape)
 					q_values = q_values.gather(1, action_batch)
 					with torch.no_grad():
-						hrm_for_snake.z_init_policy, max_next_q = target_net((hrm_for_snake.z_init_policy[0],
+						# hrm_for_snake.z_init_policy, max_next_q = target_net((hrm_for_snake.z_init_policy[0],
+							# hrm_for_snake.z_init_policy[1]), next_obs_batch)
+						_, max_next_q = target_net((hrm_for_snake.z_init_policy[0],
 							hrm_for_snake.z_init_policy[1]), next_obs_batch)
 						# print(max_next_q.shape)
 						# quit()

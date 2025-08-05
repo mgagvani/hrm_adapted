@@ -30,7 +30,6 @@ class ConvNet(nn.Module):
 		x = F.relu(x)
 		x = x.flatten(start_dim=1)
 		x = self.fc(x)
-		# print(x.shape)
 		return x
 
 class Net(nn.Module):
@@ -53,37 +52,6 @@ class Net(nn.Module):
 
 	def forward(self, zL, zH, x=None):
 
-		# if x == None:
-		# 	x = torch.zeros(zL.shape).to(device)
-		# if zL.shape[0] < x.shape[0]:
-		# 	zL = zL.repeat(x.shape[0], 1, 1)
-		# if zH.shape[0] < x.shape[0]:
-		# 	zH = zH.repeat(x.shape[0], 1, 1)
-		# if zL.shape[0] > x.shape[0]:
-		# 	zL = zL[0, :, :]
-		# if zH.shape[0] > x.shape[0]:
-		# 	zH = zH[0, :, :]
-
-
-		# if len(zL.shape) == 2:
-		# 	zL = zL.unsqueeze(dim=1)
-		# if len(zH.shape) == 2:
-		# 	zH = zH.unsqueeze(dim=1)
-		# if len(x.shape) == 2:
-		# 	x = x.unsqueeze(dim=1)
-
-		# desired_shape = zL.shape
-
-		# print(zL.shape, zH.shape, x.shape)
-
-		# assert zL.shape == zH.shape
-		# assert zL.shape == x.shape
-
-		# bs = zL.shape[0]
-
-		# if x == None:
-			# x = torch.zeros(zL.shape[0], internal_width).to(device)
-
 		if len(zL.shape) == 2:
 			zL = zL.unsqueeze(dim=1)
 		if len(zH.shape) == 2:
@@ -96,14 +64,9 @@ class Net(nn.Module):
 		if zL.shape[0] < zH.shape[0]:
 			zL = zL.repeat(batch_size, 1, 1)
 
-		# print(zL.shape)
-
-		# Causal Self-Attention
-		# print(zL.shape, zH.shape, x.shape)
 		if x == None:
 			x = torch.concat([zL, zH], dim=1)
 		else:
-			# print(zL.shape, zH.shape, x.shape)
 			if x.shape[0] > zL.shape[0]:
 				zL = zL.repeat(batch_size, 1, 1)
 			if x.shape[0] > zH.shape[0]:
@@ -111,12 +74,14 @@ class Net(nn.Module):
 			if x.shape[0] < zL.shape[0]:
 				x = x.repeat(batch_size, 1, 1)
 			x = torch.concat([zL, zH, x], dim=1)
+
+		# Causal Self-Attention
 		B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 		q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
 		k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 		q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 		v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-		y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+		y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=False)
 		y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 		y = self.resid_dropout(self.c_proj(y))
 
@@ -124,12 +89,9 @@ class Net(nn.Module):
 		y = self.c_fc(y)
 		y = self.gelu(y)
 		y = self.c_fc2(y)
-		y = self.fc_dropout(y)
+		y = self.fc_dropout(y) + x
 
-		# print(y.shape)
-		y = y[:,-1:,:] #.reshape(desired_shape)
-
-		# print(y.shape)
+		y = y[:,-1:,:]
 
 		return y # zL
 
@@ -146,18 +108,12 @@ class InputHead(nn.Module):
 class OutputHead(nn.Module):
 	def __init__(self, output_size=4):
 		super(OutputHead, self).__init__()
-		# self.dropout = nn.Dropout(0.5)
 		self.fc1 = nn.Linear(internal_width, output_size)
 
 	def forward(self, x):
-		# print(x.shape)
-		# x = x[:, -1, :]
 		x = x.flatten(start_dim=1)
 		x = self.fc1(x)
-		# print(x.shape)
-		# x = x.reshape((4, 1))
 		x = F.softmax(x, dim=1)
-		# print(x.shape)
 		return x
 
 class HRM(nn.Module):
@@ -166,10 +122,8 @@ class HRM(nn.Module):
 		self.L_net = Net()
 		self.H_net = Net()
 		self.output_head = OutputHead(output_size)
-		# self.input_embedding = InputHead()
 		self.input_embedding = ConvNet()
 	def forward(self, z, x, N=2, T=2):
-		# x = x.reshape(x.shape[0], x.shape[1]*x.shape[2]*x.shape[3]).to(device)
 		x = x.to(device)
 		x = self.input_embedding(x)
 		zH, zL = z
