@@ -2,7 +2,7 @@
 
 A (probably buggy) implementation of Hierarchical Reasoning Model (https://arxiv.org/abs/2506.21734) for the game of Snake.
 
-https://github.com/user-attachments/assets/27e0ec03-b1fa-4eff-ad09-8e38da2ddef8
+![output](https://github.com/user-attachments/assets/bc926bb1-504c-46c4-903a-1af1ab96a8b8)
 
 ## Usage
 
