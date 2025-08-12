@@ -13,7 +13,7 @@ from adam_atan2_pytorch import AdamAtan2
 batch_size = 32
 width = 1600
 internal_width = 256
-device = "mps"
+device = "cuda"
 bias = True
 torch.utils.backcompat.broadcast_warning.enabled = True
 
@@ -174,4 +174,3 @@ if __name__ == "__main__":
 	plt.scatter(xs, y_hats, s=0.1)
 	plt.scatter(xs, y_trues, s=0.1)
 	plt.savefig("plot.png")
-

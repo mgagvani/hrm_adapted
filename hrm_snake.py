@@ -29,7 +29,7 @@ CURIOSITY_ENABLED = False
 
 RENDER_EVERY = 1 #20
 
-device = torch.device("cuda" if torch.cuda.is_available() else "mps")
+device = torch.device("cuda")
 print(f"Using device: {device}\n")
 
 class ReplayMemory:
@@ -300,5 +300,3 @@ if __name__ == "__main__":
 	except KeyboardInterrupt:
 		print("\nTraining interrupted by user.")
 		pygame.quit()
-
-

@@ -1,0 +1,7 @@
+# standard python
+__pycache__/
+
+# project speccific
+*.mp4
+*.pth
+
