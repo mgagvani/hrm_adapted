@@ -12,22 +12,31 @@ import matplotlib.pyplot as plt
 import time
 import hrm_for_snake
 from hrm_for_snake import internal_width
+try:
+	import wandb
+	WANDB_AVAILABLE = True
+except Exception:
+	WANDB_AVAILABLE = False
 
 # Hyperparameters
 GAMMA = 0.99
 LR = 1e-4
 BATCH_SIZE = hrm_for_snake.batch_size
 MEMORY_SIZE = int(1e6) #10000
-EPSILON_START = 0.0
-EPSILON_END = 0.0
-EPSILON_DECAY = 0.5
+EPSILON_START = 0.99
+EPSILON_END = 0.01
+EPSILON_DECAY = 0.999
 TARGET_UPDATE_FREQ = 10
-EPISODES = 50000000000000
+EPISODES = 5000
 # THRESHOLD = 0.01
 CURIOSITY_SCALING_FACTOR = 10
 CURIOSITY_ENABLED = False
 
 RENDER_EVERY = 1 #20
+
+WANDB_PROJECT = "hrm-snake"
+EVAL_EVERY = 50
+EVAL_EPISODES = 5
 
 device = torch.device("cuda")
 print(f"Using device: {device}\n")
@@ -66,6 +75,37 @@ def train(model_path=None):
 	print("target_net:", sum(p.numel() for p in policy_net.parameters()))
 	print("future_net:", sum(p.numel() for p in policy_net.parameters()))
 
+	# Initialize Weights & Biases
+	if WANDB_AVAILABLE:
+		run_name = f"hrm_snake-{int(start_time)}"
+		wandb.init(
+			project=WANDB_PROJECT,
+			name=run_name,
+			config={
+				"gamma": GAMMA,
+				"lr": LR,
+				"batch_size": BATCH_SIZE,
+				"memory_size": MEMORY_SIZE,
+				"epsilon_start": EPSILON_START,
+				"epsilon_end": EPSILON_END,
+				"epsilon_decay": EPSILON_DECAY,
+				"target_update_freq": TARGET_UPDATE_FREQ,
+				"episodes": EPISODES,
+				"curiosity_enabled": CURIOSITY_ENABLED,
+				"curiosity_scale": CURIOSITY_SCALING_FACTOR,
+				"render_every": RENDER_EVERY,
+				"device": str(device),
+				"policy_params": sum(p.numel() for p in policy_net.parameters()),
+				"target_params": sum(p.numel() for p in target_net.parameters()),
+				"future_params": sum(p.numel() for p in future_net.parameters()),
+			},
+		)
+		# Log gradients/parameters occasionally
+		try:
+			wandb.watch(policy_net, log="gradients", log_freq=100)
+		except Exception:
+			pass
+
 	if model_path is not None:
 		print(f"Loading model from: {model_path}")
 		policy_net.load_state_dict(torch.load(model_path, map_location=device))
@@ -89,8 +129,18 @@ def train(model_path=None):
 	all_scores = []
 	all_losses = []
 
+	# Global step counter across episodes
+	global_step = 0
+
 	for episode in range(EPISODES):
 		obs = env.reset()
+
+		# Episode-level bookkeeping
+		episode_start_time = time.time()
+		episode_steps = 0
+		last_q_mean = 0.0
+		last_q_max = 0.0
+		last_grad_norm = 0.0
 
 		hrm_for_snake.z_init_policy = torch.randn((1, internal_width)), torch.randn((1, internal_width)).to(device)
 		hrm_for_snake.z_init_target = torch.randn((1, internal_width)), torch.randn((1, internal_width)).to(device)
@@ -153,6 +203,8 @@ def train(model_path=None):
 			future_memory.push((obs, next_obs))
 			obs = next_obs
 			total_reward += reward
+			global_step += 1
+			episode_steps += 1
 			if CURIOSITY_ENABLED:
 				total_curiosity_reward += curiosity.detach().item() * CURIOSITY_SCALING_FACTOR
 
@@ -176,10 +228,13 @@ def train(model_path=None):
 					# print(obs_batch.shape, action_batch.shape)
 					# hrm_for_snake.z_init_policy, q_values = policy_net((hrm_for_snake.z_init_policy[0],
 						# hrm_for_snake.z_init_policy[1]), obs_batch)
-					_, q_values = policy_net((hrm_for_snake.z_init_policy[0],
+					_, q_all = policy_net((hrm_for_snake.z_init_policy[0],
 						hrm_for_snake.z_init_policy[1]), obs_batch)
-					# print(q_values.shape)
-					q_values = q_values.gather(1, action_batch)
+					# Q-value stats over batch and actions (pre-gather)
+					q_mean = q_all.mean().item()
+					q_max = q_all.max().item()
+					# Select Q(s,a) for taken actions
+					q_values = q_all.gather(1, action_batch)
 					with torch.no_grad():
 						# hrm_for_snake.z_init_policy, max_next_q = target_net((hrm_for_snake.z_init_policy[0],
 							# hrm_for_snake.z_init_policy[1]), next_obs_batch)
@@ -206,13 +261,16 @@ def train(model_path=None):
 					hrm_for_snake.z_init_target[1].detach()
 					# with torch.autograd.set_detect_anomaly(True):
 					loss.backward()
-					torch.nn.utils.clip_grad_norm_(policy_net.parameters(), max_norm=1.0)
+					grad_total_norm = float(torch.nn.utils.clip_grad_norm_(policy_net.parameters(), max_norm=1.0))
 
 					#5 Gradient Descent
 					optimizer.step()
 
-					# visualization
+					# visualization / stats
 					episode_losses.append(loss.item())
+					last_q_mean = q_mean
+					last_q_max = q_max
+					last_grad_norm = grad_total_norm
 
 					n = 0
 
@@ -241,8 +299,12 @@ def train(model_path=None):
 
 		# visualization
 		avg_loss = np.mean(episode_losses) if episode_losses else 0
+		min_loss = float(np.min(episode_losses)) if episode_losses else 0.0
+		max_loss = float(np.max(episode_losses)) if episode_losses else 0.0
 		all_losses.append(avg_loss)
 		all_scores.append(score)
+		episode_duration = time.time() - episode_start_time
+		steps_per_sec = episode_steps / episode_duration if episode_duration > 0 else 0.0
 
 		# Update target network
 		if episode % TARGET_UPDATE_FREQ == 0:
@@ -250,18 +312,83 @@ def train(model_path=None):
 			hrm_for_snake.z_init_target = hrm_for_snake.z_init_policy
 
 		epsilon = max(EPSILON_END, epsilon * EPSILON_DECAY)
-		print(f"Episode {episode}, Total reward: {round(total_reward, 2)}, Total curiosity reward: {round(total_curiosity_reward, 2)}, Score: {score}, Epsilon: {epsilon:.3f}")
+		print(f"Episode {episode}, Total reward: {round(total_reward, 2)}, Total curiosity reward: {round(total_curiosity_reward, 2)}, Score: {score}, Epsilon: {epsilon:.3f}, Steps: {episode_steps}")
+
+		# Log episode metrics to Weights & Biases
+		if WANDB_AVAILABLE:
+			wandb.log(
+				{
+					"episode": episode,
+					"global_step": global_step,
+					"total_reward": float(total_reward),
+					"total_curiosity_reward": float(total_curiosity_reward),
+					"score": int(score),
+					"epsilon": float(epsilon),
+					"avg_loss": float(avg_loss),
+					"min_loss": float(min_loss),
+					"max_loss": float(max_loss),
+					"episode_len": int(episode_steps),
+					"replay_size": int(len(memory)),
+					"q_mean": float(last_q_mean),
+					"q_max": float(last_q_max),
+					"grad_norm": float(last_grad_norm),
+					"episode_duration_sec": float(episode_duration),
+					"steps_per_sec": float(steps_per_sec),
+				},
+				step=episode,
+			)
+
+		# Periodic evaluation (epsilon=0, no learning)
+		if WANDB_AVAILABLE and (episode % EVAL_EVERY == 0):
+			try:
+				avg_eval_score = 0.0
+				avg_eval_len = 0.0
+				for _ in range(EVAL_EPISODES):
+					eval_env = SnakeEnv()
+					_eobs = eval_env.reset()
+					# Reset HRM hidden state for evaluation
+					hrm_for_snake.z_init_policy = torch.randn((1, internal_width)), torch.randn((1, internal_width)).to(device)
+					_edone = False
+					_elen = 0
+					for __ in range(1000):
+						if _edone:
+							break
+						with torch.no_grad():
+							_eobs_tensor = torch.tensor(_eobs, dtype=torch.float32, device=device).unsqueeze(0)
+							hrm_for_snake.z_init_policy, _q = policy_net(hrm_for_snake.z_init_policy, _eobs_tensor)
+							_act = _q.mean(0).argmax().item()
+						_eobs, _, _edone = eval_env.step(_act)
+						_elen += 1
+					_eval_score = eval_env.snake_size - eval_env.STARTING_SIZE
+					avg_eval_score += _eval_score
+					avg_eval_len += _elen
+				avg_eval_score /= float(EVAL_EPISODES)
+				avg_eval_len /= float(EVAL_EPISODES)
+				wandb.log({"eval/avg_score": avg_eval_score, "eval/avg_len": avg_eval_len, "eval/episodes": EVAL_EPISODES, "global_step": global_step}, step=episode)
+			except Exception:
+				pass
 
 		# NOTE: only saves best score episode AMONG the few ones recorded...
 		if render and score > best_rendered_score:
 			best_rendered_score = score
 			print(f"New best score {best_rendered_score} at episode {episode}. Saving video...")
 			imageio.mimwrite(video_filename, frames, fps=15, codec='libx264', quality=8)
+			if WANDB_AVAILABLE:
+				try:
+					wandb.log({"best_episode_video": wandb.Video(video_filename, fps=15, format="mp4"), "best_rendered_score": int(best_rendered_score)}, step=episode)
+				except Exception:
+					pass
 		
 		if score > best_score: # best total score among all episodes
 			best_score = score
 			print(f"New best model score: {best_score}. Saving model weights...")
 			torch.save(policy_net.state_dict(), model_save_path)
+			if WANDB_AVAILABLE:
+				try:
+					# Associate the saved weights with the run for convenience
+					wandb.save(model_save_path)
+				except Exception:
+					pass
 
 	
 	# After training complete:
@@ -287,11 +414,22 @@ def train(model_path=None):
 	plt.tight_layout()
 	plt.savefig("training_metrics.png")
 
+	if WANDB_AVAILABLE:
+		try:
+			wandb.log({"training_metrics": wandb.Image("training_metrics.png"), "best_score": int(best_score)})
+		except Exception:
+			pass
+
 	elapsed = time.time() - start_time
 	minutes, seconds = divmod(int(elapsed), 60)
 	print(f"\nTotal training time: {minutes} minutes and {seconds} seconds")
 
 	print(f"\nBest score from a single episode in training: {best_score}")
+	if WANDB_AVAILABLE:
+		try:
+			wandb.finish()
+		except Exception:
+			pass
 		
 if __name__ == "__main__":
 	try:
