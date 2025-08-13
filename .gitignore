@@ -4,4 +4,6 @@ __pycache__/
 # project speccific
 *.mp4
 *.pth
+wandb/
+*.png
 

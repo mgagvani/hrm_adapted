@@ -10,7 +10,7 @@ from tqdm import tqdm
 from adam_atan2_pytorch import AdamAtan2
 
 
-batch_size = 32
+batch_size = 256
 width = 1600
 internal_width = 256
 device = "cuda"
